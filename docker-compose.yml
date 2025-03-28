@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  status-page:
+    build: .
+    ports:
+      - "3030:3030"
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    restart: unless-stopped
+    environment:
+      - DB_HOST=streamlittest.cluster-cxb7mqzhrxh1.us-east-1.rds.amazonaws.com
+      - DB_USER=uptime
+      - DB_PASSWORD=NbXpYdhj7D36uCBWaEws5f
+      - DB_NAME=uptime
+

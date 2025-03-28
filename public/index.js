@@ -256,13 +256,26 @@ function hideTooltip() {
 }
 
 async function genAllReports() {
+  // Check if reports already exist
+  const reportsContainer = document.getElementById("reports");
+  if (reportsContainer && reportsContainer.children.length > 0) {
+    console.log("Reports already exist, skipping generation");
+    return; // Skip report generation if containers already exist
+  }
+  
   const response = await fetch("/urls");
   const configText = await response.text();
   const configLines = configText.split("\n");
   const containers = [];
+  console.log(configLines)
   for (let ii = 0; ii < configLines.length; ii++) {
     const configLine = configLines[ii];
-    const [key, url] = configLine.split("=");
+    const index = configLine.indexOf('=');
+    if (index === -1) continue;
+    
+    const key = configLine.substring(0, index);
+    const url = configLine.substring(index + 1);
+    
     if (!key || !url) {
       continue;
     }
@@ -271,12 +284,292 @@ async function genAllReports() {
     containers.push(container);
   }
 
-  // Sort containers by priority
+  // // Sort containers by priority
   containers.sort((a, b) => a.dataset.priority - b.dataset.priority);
 
   // Append sorted containers to the DOM
-  const reportsContainer = document.getElementById("reports");
   containers.forEach(container => {
     reportsContainer.appendChild(container);
   });
+  
+  console.log(`Generated ${containers.length} report containers`);
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Create a header element to show alerts
+    const alertHeader = document.createElement('div');
+    alertHeader.style.textAlign = 'center';
+    alertHeader.style.padding = '15px';
+    alertHeader.style.fontSize = '24px';
+    alertHeader.style.fontWeight = 'bold';
+    alertHeader.style.margin = '10px 0';
+    
+    // Create a connection status indicator
+    const connectionStatus = document.createElement('div');
+    connectionStatus.style.position = 'fixed';
+    connectionStatus.style.top = '10px';
+    connectionStatus.style.right = '10px';
+    connectionStatus.style.padding = '10px 15px';
+    connectionStatus.style.borderRadius = '5px';
+    connectionStatus.style.fontWeight = 'bold';
+    connectionStatus.style.fontSize = '18px';
+    connectionStatus.style.zIndex = '1000'; // Make sure it's on top
+    connectionStatus.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+    
+    // Set initial status
+    updateConnectionStatus(connectionStatus, false);
+    
+    // Insert elements into the page
+    if (document.body.firstChild) {
+        document.body.insertBefore(alertHeader, document.body.firstChild);
+    } else {
+        document.body.appendChild(alertHeader);
+    }
+    document.body.appendChild(connectionStatus);
+    
+    // Keep track of the current rotation index
+    let rotationIndex = 0;
+    
+    // Don't call genAllReports() from here - it's likely called elsewhere in the original code
+    // Just wait for the reports container to have children before initializing Socket.IO
+    waitForReportsToLoad().then(() => {
+        console.log("Reports loaded, connecting to socket.io");
+        initializeSocketConnection();
+    }).catch(error => {
+        console.error("Error waiting for reports:", error);
+        alertHeader.style.backgroundColor = '#e74c3c';
+        alertHeader.style.color = 'white';
+        alertHeader.textContent = 'ERROR LOADING REPORTS: ' + error.message;
+    });
+    
+    // Function to wait for reports to be loaded
+    function waitForReportsToLoad() {
+        return new Promise((resolve, reject) => {
+            const reportsContainer = document.getElementById("reports");
+            
+            // If reports are already loaded, resolve immediately
+            if (reportsContainer && reportsContainer.children.length > 0) {
+                return resolve();
+            }
+            
+            // Otherwise, set up a small polling interval to check
+            let attempts = 0;
+            const maxAttempts = 20; // Try for ~10 seconds (20 attempts × 500ms)
+            
+            const checkInterval = setInterval(() => {
+                attempts++;
+                const reportsContainer = document.getElementById("reports");
+                
+                if (reportsContainer && reportsContainer.children.length > 0) {
+                    clearInterval(checkInterval);
+                    resolve();
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkInterval);
+                    reject(new Error("Timed out waiting for reports to load"));
+                }
+            }, 500);
+        });
+    }
+    
+    // Function to initialize Socket.IO connection
+    function initializeSocketConnection() {
+        try {
+            // Change from default connection to specific URL
+            // const socket = io();
+            const socket = io('http://192.168.1.101:3030', {
+                reconnectionDelayMax: 10000,
+                transports: ['websocket']
+            });
+            
+            // Handle connection events
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                updateConnectionStatus(connectionStatus, true);
+                
+                // Request data immediately after connecting
+                socket.emit('requestUpdate');
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+                updateConnectionStatus(connectionStatus, false);
+                
+                alertHeader.style.backgroundColor = '#e74c3c';
+                alertHeader.style.color = 'white';
+                alertHeader.textContent = 'CONNECTION LOST - RECONNECTING...';
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.log('Connection error:', error);
+                updateConnectionStatus(connectionStatus, false);
+            });
+            
+            // Receive status updates
+            socket.on('statusUpdate', (data) => {
+                console.log('Received status update:', data.length, 'items');
+                
+                // Update the header notification
+                updateHeaderStatus(data, alertHeader);
+                
+                // Simply shuffle the direct children of the reports container
+                shuffleReportContainers();
+            });
+        } catch (error) {
+            console.error('Error initializing Socket.IO:', error);
+            updateConnectionStatus(connectionStatus, false);
+            
+            alertHeader.style.backgroundColor = '#e74c3c';
+            alertHeader.style.color = 'white';
+            alertHeader.textContent = 'CONNECTION ERROR: ' + error.message;
+        }
+    }
+    
+    // Function to update connection status indicator
+    function updateConnectionStatus(element, isConnected) {
+        if (isConnected) {
+            element.style.backgroundColor = '#27ae60'; // Green
+            element.style.color = 'white';
+            element.innerHTML = `
+                <span style="display: inline-block; width: 12px; height: 12px; 
+                             background-color: white; border-radius: 50%; margin-right: 8px;"></span>
+                CONNECTED
+            `;
+        } else {
+            element.style.backgroundColor = '#e74c3c'; // Red
+            element.style.color = 'white';
+            element.innerHTML = `
+                <span style="display: inline-block; width: 12px; height: 12px; 
+                             background-color: white; border-radius: 50%; margin-right: 8px;
+                             animation: blink 1s infinite;"></span>
+                DISCONNECTED
+            `;
+            
+            // Add blinking animation for disconnected state
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes blink {
+                    0% { opacity: 0.3; }
+                    50% { opacity: 1; }
+                    100% { opacity: 0.3; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+    
+    // Function to update the header status based on failing services
+    function updateHeaderStatus(data, headerElement) {
+        if (!data || !Array.isArray(data) || data.length === 0) {
+            headerElement.style.backgroundColor = '#f8f8f8';
+            headerElement.style.color = '#333';
+            headerElement.textContent = 'No status data available';
+            return;
+        }
+        
+        // Group data by service key
+        const services = {};
+        data.forEach(item => {
+            if (!services[item.key]) {
+                services[item.key] = [];
+            }
+            services[item.key].push(item);
+        });
+        
+        // Find failing services
+        const failingServices = [];
+        
+        for (const [serviceName, entries] of Object.entries(services)) {
+            // Sort entries by date (newest first)
+            entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            
+            // Check latest entry
+            const latestEntry = entries[0];
+            if (latestEntry.result !== 'success') {
+                failingServices.push(serviceName);
+            }
+        }
+        
+        // Update container visibility
+        updateContainerVisibility(failingServices);
+        
+        // Update the header based on failing services
+        if (failingServices.length === 0) {
+            // All operational
+            headerElement.style.backgroundColor = '#27ae60';
+            headerElement.style.color = 'white';
+            headerElement.textContent = 'ALL SYSTEMS OPERATIONAL';
+        } else {
+            // Some services are failing
+            headerElement.style.backgroundColor = '#e74c3c';
+            headerElement.style.color = 'white';
+            headerElement.innerHTML = `
+                ALERT: ${failingServices.length} SERVICE${failingServices.length > 1 ? 'S' : ''} DOWN
+                <div style="font-size: 18px; margin-top: 5px;">
+                    ${failingServices.join(', ')}
+                </div>
+            `;
+        }
+    }
+    
+    // Function to update container visibility based on failing services
+    function updateContainerVisibility(failingServices) {
+        const reportContainers = document.querySelectorAll('#reports > [id^="template_clone_"]');
+        
+        reportContainers.forEach(container => {
+            const titleElement = container.querySelector('.title');
+            if (!titleElement) return;
+            
+            const serviceName = titleElement.textContent.trim();
+            const isServiceFailing = failingServices.includes(serviceName);
+            
+            // Show or hide based on service status
+            container.style.display = isServiceFailing ? '' : 'none';
+        });
+    }
+    
+    // Simple function to shuffle report containers
+    function shuffleReportContainers() {
+        const reportsContainer = document.getElementById('reports');
+        if (!reportsContainer) {
+            console.log("Reports container not found");
+            return;
+        }
+        
+        const children = Array.from(reportsContainer.children);
+        if (children.length <= 1) {
+            console.log("Not enough containers to shuffle");
+            return;
+        }
+        
+        console.log(`Shuffling ${children.length} containers`);
+        
+        // Remove all children
+        while (reportsContainer.firstChild) {
+            reportsContainer.removeChild(reportsContainer.firstChild);
+        }
+        
+        // Shuffle array
+        for (let i = children.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [children[i], children[j]] = [children[j], children[i]];
+        }
+        
+        // Add animation properties to each child
+        children.forEach((child, index) => {
+            child.style.transition = 'transform 0.5s ease-out, opacity 0.5s ease-out';
+            child.style.opacity = '0';
+            child.style.transform = 'translateY(20px)';
+            
+            // Re-append in new order
+            reportsContainer.appendChild(child);
+            
+            // Trigger animation
+            setTimeout(() => {
+                child.style.opacity = '1';
+                child.style.transform = 'translateY(0)';
+            }, 50 * index);
+        });
+        
+        console.log("Container shuffle complete");
+    }
+});
